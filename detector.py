@@ -190,9 +190,25 @@ class MarkerDetector:
 
         roi = cv2.bitwise_and(roi, mask)
 
-        return roi
+        candidate["roi"] = roi
 
-    def detect_lines(self, roi):
+        return candidate
+    
+    def find_contours(self, candidate):
+
+        roi = candidate["roi"]
+        contours, hierarchy = cv2.findContours(
+            roi,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_NONE
+        )
+
+        candidate["contours"] = contours
+        candidate["hierarchy"] = hierarchy
+
+        return candidate
+
+"""    def detect_lines(self, roi):
 
         lines = cv2.HoughLinesP(
             roi,
@@ -206,4 +222,4 @@ class MarkerDetector:
         if lines is None:
             return []
 
-        return lines.reshape(-1, 4) # [line[0] for line in lines]
+        return lines.reshape(-1, 4) # [line[0] for line in lines]"""

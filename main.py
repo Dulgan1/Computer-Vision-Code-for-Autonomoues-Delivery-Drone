@@ -76,17 +76,17 @@ while True:
     gray, edges = preprocessor.process(frame)
 
     # Phase 4
-    circles = detector.detect_circles(gray, edges)
+    candidates = detector.detect_circles(gray, edges)
 
     # Debug drawing
     if config.DEBUG:
 
-        for circle in circles:
-            x, y = circle["center"]
-            r = circle["radius"]
+        for candidate in candidates:
+            x, y = candidate["center"]
+            r = candidate["radius"]
 
-            confidence = circle["confidence"]
-            density = circle["density"]
+            confidence = candidate["confidence"]
+            density = candidate["density"]
 
             cv2.circle(
                 frame,
@@ -125,22 +125,27 @@ while True:
                 1
             )
 
-            roi = detector.extract_roi(gray, circle)
+            candidate = detector.extract_roi(gray, candidate)
 
-            if roi is not None:
-                cv2.imshow("ROI", roi)
-        
-            roi_display = cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
-            lines = detector.detect_lines(roi)
-            print(lines)
-            
-            for x1, y1, x2, y2 in lines:
-                cv2.line(roi_display,
-                        (x1, y1),
-                        (x2, y2),
-                        (0, 255, 0),
-                        2
-                        )
+            """if roi is not None:
+                cv2.imshow("ROI", roi)"""
+            candidate = detector.find_contours(
+                candidate
+            )
+
+            roi_display = cv2.cvtColor(
+                candidate["roi"],
+                cv2.COLOR_GRAY2BGR
+            )
+
+            cv2.drawContours(
+                roi_display,
+                candidate["contours"],
+                -1,
+                (0, 255, 0),
+                1
+            )
+
             cv2.imshow("ROI Lines", roi_display)
 
         cv2.imshow("Camera", frame)
