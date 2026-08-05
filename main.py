@@ -78,10 +78,28 @@ while True:
     # Phase 4
     candidates = detector.detect_circles(gray, edges)
 
+    # Phase 5: symbol pipeline.  The binary edge image is used here rather
+    # than grayscale so contours represent marker edges instead of the whole
+    # non-zero image region.  Keep this outside DEBUG for production parity.
+    for candidate in candidates:
+        candidate = detector.extract_roi(edges, candidate)
+        candidate = detector.find_contours(candidate)
+        candidate = detector.filter_contours(candidate)
+        candidate = detector.fit_lines(candidate)
+        candidate = detector.compute_line_features(candidate)
+        candidate = detector.cluster_orientations(candidate)
+        detector.classify_symbol(candidate)
+
     # Debug drawing
     if config.DEBUG:
 
+        debug_frame = frame.copy()
+
         for candidate in candidates:
+
+            # ----------------------------------
+            # Draw Circle Detection
+            # ----------------------------------
             x, y = candidate["center"]
             r = candidate["radius"]
 
@@ -89,48 +107,39 @@ while True:
             density = candidate["density"]
 
             cv2.circle(
-                frame,
+                debug_frame,
                 (x, y),
                 r,
                 (0, 255, 0),
                 2
             )
+
             cv2.circle(
-                frame,
+                debug_frame,
                 (x, y),
                 2,
                 (0, 0, 255),
                 -1
             )
 
-            # Confidence
             cv2.putText(
-                frame,
+                debug_frame,
                 f"Score:{confidence:.2f}",
                 (x - 35, y - r - 22),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
-                (0, 255, 0),
+                (0,255,0),
                 2
             )
 
-            # Edge density
             cv2.putText(
-                frame,
+                debug_frame,
                 f"Density:{density:.2f}",
                 (x - 35, y - r - 5),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
-                (255, 255, 0),
+                (255,255,0),
                 1
-            )
-
-            candidate = detector.extract_roi(gray, candidate)
-
-            """if roi is not None:
-                cv2.imshow("ROI", roi)"""
-            candidate = detector.find_contours(
-                candidate
             )
 
             roi_display = cv2.cvtColor(
@@ -140,16 +149,85 @@ while True:
 
             cv2.drawContours(
                 roi_display,
-                candidate["contours"],
+                [item["contour"] for item in candidate["contours"]],
                 -1,
-                (0, 255, 0),
+                (0,255,0),
+                2
+            )
+
+            for contour_object in candidate["contours"]:
+                endpoints = contour_object["line_endpoints"]
+
+                if endpoints is None:
+                    continue
+
+                start, end = endpoints
+                start = tuple(round(value) for value in start)
+                end = tuple(round(value) for value in end)
+                cv2.line(roi_display, start, end, (255, 0, 0), 1)
+
+                midpoint = tuple(round(value) for value in contour_object["midpoint"])
+                cv2.putText(
+                    roi_display,
+                    f"{contour_object['angle']:.0f} deg",
+                    midpoint,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.35,
+                    (255, 0, 0),
+                    1,
+                )
+
+            cv2.putText(
+                roi_display,
+                f"Contours: {len(candidate['contours'])}",
+                (5,20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0,255,255),
                 1
             )
 
-            cv2.imshow("ROI Lines", roi_display)
+            cluster_angles = ", ".join(
+                f"{cluster['angle']:.0f} deg ({cluster['count']})"
+                for cluster in candidate["orientation_clusters"]
+            )
+            cv2.putText(
+                roi_display,
+                f"Directions: {cluster_angles or 'none'}",
+                (5, 38),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (0, 255, 255),
+                1,
+            )
+            cv2.putText(
+                roi_display,
+                f"Symbol: {candidate['symbol']} ({candidate['symbol_confidence']:.2f})",
+                (5, 54),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (0, 255, 255),
+                1,
+            )
 
-        cv2.imshow("Camera", frame)
-        cv2.imshow("Edges", edges)
+            if candidate["crossing_point"] is not None:
+                crossing_point = tuple(round(value) for value in candidate["crossing_point"])
+                cv2.circle(roi_display, crossing_point, 3, (0, 0, 255), -1)
+
+            cv2.imshow(
+                "ROI",
+                roi_display
+            )
+
+        cv2.imshow(
+            "Camera",
+            debug_frame
+        )
+
+        cv2.imshow(
+            "Edges",
+            edges
+        )
 
     key = cv2.waitKey(1)
 

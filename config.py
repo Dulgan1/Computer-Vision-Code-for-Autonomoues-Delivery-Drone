@@ -79,3 +79,28 @@ HOUGH_LINE_THRESHOLD = 20
 MIN_LINE_LENGTH = 20
 
 MAX_LINE_GAP = 5
+
+# =========================
+# Contour Filtering
+# ==========================
+MIN_CONTOUR_AREA = 40
+
+# =========================
+# Orientation Clustering
+# =========================
+# Maximum axial angle difference for contours in the same stroke direction.
+ORIENTATION_CLUSTER_TOLERANCE_DEGREES = 15.0
+
+# =========================
+# Symbol Classification
+# =========================
+SYMBOL_ANGLE_TOLERANCE_DEGREES = 20.0
+MIN_SYMBOL_CONFIDENCE = 0.60
+
+# A valid generic marker contains two non-parallel strokes that intersect in
+# the circular ROI. These limits reject nearly parallel fragments and
+# intersections outside the landing marker.
+MIN_CROSSING_ANGLE_DEGREES = 20.0
+MAX_CROSS_CENTER_OFFSET_RATIO = 0.95
+CROSS_SEGMENT_EXTENSION_RATIO = 0.15
+MIN_CROSS_CONFIDENCE = 0.45

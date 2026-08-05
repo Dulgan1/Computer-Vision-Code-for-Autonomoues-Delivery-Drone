@@ -167,15 +167,13 @@ class MarkerDetector:
 
         return candidates
 
-    def extract_roi(self, gray, candidate):
-        """
-        Extract circular ROI from grayscale image.
-        """
+    def extract_roi(self, image, candidate):
+        """Extract a circular ROI from a grayscale or binary input image."""
 
         x, y = candidate["center"]
         r = candidate["radius"]
 
-        roi = gray[y-r:y+r, x-r:x+r]
+        roi = image[y-r:y+r, x-r:x+r]
 
         # Circular mask
         mask = np.zeros(roi.shape, dtype=np.uint8)
@@ -193,7 +191,7 @@ class MarkerDetector:
         candidate["roi"] = roi
 
         return candidate
-    
+
     def find_contours(self, candidate):
 
         roi = candidate["roi"]
@@ -205,6 +203,355 @@ class MarkerDetector:
 
         candidate["contours"] = contours
         candidate["hierarchy"] = hierarchy
+
+        return candidate
+
+    def filter_contours(self, candidate):
+        """Discard small contours and attach reusable geometric features.
+
+        ``find_contours`` remains the OpenCV-facing stage and stores raw
+        contour arrays. After this method, ``candidate[\"contours\"]`` contains
+        contour objects for the geometry stages that follow.
+        """
+
+        filtered = []
+
+        for contour in candidate["contours"]:
+            area = cv2.contourArea(contour)
+
+            if area < config.MIN_CONTOUR_AREA:
+                continue
+
+            perimeter = cv2.arcLength(contour, closed=True)
+            x, y, width, height = cv2.boundingRect(contour)
+
+            filtered.append({
+                "contour": contour,
+                "area": area,
+                "perimeter": perimeter,
+                "bbox": (x, y, width, height),
+            })
+
+        candidate["contours"] = filtered
+
+        return candidate
+
+    def fit_lines(self, candidate):
+        """Fit a direction line to each retained contour.
+
+        OpenCV returns a unit direction vector ``(vx, vy)`` and a point
+        ``(x0, y0)`` on the fitted line. The next stage uses that direction to
+        compute orientation; keeping the point makes the fit inspectable in
+        the debug view and available for later geometric checks.
+        """
+
+        for contour_object in candidate["contours"]:
+            contour = contour_object["contour"]
+
+            if len(contour) < 2:
+                contour_object["line"] = None
+                continue
+
+            line = cv2.fitLine(
+                contour,
+                cv2.DIST_L2,
+                0,
+                0.01,
+                0.01,
+            ).reshape(4)
+
+            contour_object["line"] = tuple(float(value) for value in line)
+
+        return candidate
+
+    def compute_line_features(self, candidate):
+        """Derive finite, orientation-aware features from fitted contour lines.
+
+        A fitted line is infinite, so its useful marker-stroke length comes
+        from projecting every contour point onto its unit direction vector.
+        The minimum and maximum projections define the two support endpoints.
+        """
+
+        for contour_object in candidate["contours"]:
+            line = contour_object["line"]
+
+            if line is None:
+                contour_object["angle"] = None
+                contour_object["length"] = None
+                contour_object["midpoint"] = None
+                contour_object["line_endpoints"] = None
+                continue
+
+            vx, vy, x0, y0 = line
+            direction = np.array([vx, vy], dtype=np.float32)
+            point_on_line = np.array([x0, y0], dtype=np.float32)
+            points = contour_object["contour"].reshape(-1, 2).astype(np.float32)
+
+            projections = (points - point_on_line) @ direction
+            start = point_on_line + projections.min() * direction
+            end = point_on_line + projections.max() * direction
+            midpoint = (start + end) / 2.0
+
+            contour_object["angle"] = float(np.degrees(np.arctan2(vy, vx)) % 180.0)
+            contour_object["length"] = float(np.linalg.norm(end - start))
+            contour_object["midpoint"] = tuple(float(value) for value in midpoint)
+            contour_object["line_endpoints"] = (
+                tuple(float(value) for value in start),
+                tuple(float(value) for value in end),
+            )
+
+        return candidate
+
+    @staticmethod
+    def _orientation_distance(first_angle, second_angle):
+        """Return the smallest difference between two orientations in degrees.
+
+        Orientations have a 180-degree period: 0 and 180 degrees describe the
+        same undirected line, unlike a heading where they are opposites.
+        """
+
+        return abs((first_angle - second_angle + 90.0) % 180.0 - 90.0)
+
+    @staticmethod
+    def _mean_orientation(contours):
+        """Compute a length-weighted mean for orientations with 180-degree period."""
+
+        angles = np.radians([2.0 * item["angle"] for item in contours])
+        weights = np.array([item["length"] for item in contours])
+        mean_angle = 0.5 * np.degrees(
+            np.arctan2(
+                np.sum(weights * np.sin(angles)),
+                np.sum(weights * np.cos(angles)),
+            )
+        )
+        return float(mean_angle % 180.0)
+
+    def cluster_orientations(self, candidate):
+        """Group contour directions into the marker's dominant orientations.
+
+        Longer contours establish clusters first, so substantial marker strokes
+        outweigh short residual fragments. Each cluster keeps its member
+        contours, count, total support length, and a length-weighted angle.
+        """
+
+        usable_contours = [
+            item
+            for item in candidate["contours"]
+            if item.get("angle") is not None and item.get("length", 0.0) > 0.0
+        ]
+        usable_contours.sort(key=lambda item: item["length"], reverse=True)
+
+        clusters = []
+
+        for contour_object in usable_contours:
+            nearest_cluster = None
+            nearest_distance = float("inf")
+
+            for cluster in clusters:
+                distance = self._orientation_distance(
+                    contour_object["angle"], cluster["angle"]
+                )
+
+                if distance < nearest_distance:
+                    nearest_cluster = cluster
+                    nearest_distance = distance
+
+            if nearest_distance > config.ORIENTATION_CLUSTER_TOLERANCE_DEGREES:
+                nearest_cluster = {"contours": []}
+                clusters.append(nearest_cluster)
+
+            nearest_cluster["contours"].append(contour_object)
+            nearest_cluster["angle"] = self._mean_orientation(
+                nearest_cluster["contours"]
+            )
+            nearest_cluster["count"] = len(nearest_cluster["contours"])
+            nearest_cluster["total_length"] = sum(
+                item["length"] for item in nearest_cluster["contours"]
+            )
+
+        candidate["orientation_clusters"] = sorted(
+            clusters,
+            key=lambda cluster: cluster["total_length"],
+            reverse=True,
+        )
+
+        return candidate
+
+    def _template_error(self, observed_angles, target_angles):
+        """Return the best mean error for either pairing of two orientations."""
+
+        direct_error = (
+            self._orientation_distance(observed_angles[0], target_angles[0])
+            + self._orientation_distance(observed_angles[1], target_angles[1])
+        ) / 2.0
+        swapped_error = (
+            self._orientation_distance(observed_angles[0], target_angles[1])
+            + self._orientation_distance(observed_angles[1], target_angles[0])
+        ) / 2.0
+        return min(direct_error, swapped_error)
+
+    @staticmethod
+    def _cross_product(first, second):
+        return first[0] * second[1] - first[1] * second[0]
+
+    def score_crossing_lines(self, candidate):
+        """Score the strongest pair of distinct directions that crosses in the ROI.
+
+        Unlike X/+ templates, this accepts a rotated or perspective-distorted
+        marker. The intersection must lie on both finite contour supports and
+        inside the candidate circle, not merely where two infinite lines meet.
+        """
+
+        candidate["crossing_point"] = None
+        candidate["crossing_angle"] = None
+        candidate["cross_confidence"] = 0.0
+
+        radius = candidate.get("radius")
+        if radius is None:
+            return candidate
+
+        best_crossing = None
+        clusters = candidate.get("orientation_clusters", [])
+
+        for first_index, first_cluster in enumerate(clusters):
+            for second_cluster in clusters[first_index + 1:]:
+                first_contours = [
+                    item for item in first_cluster.get("contours", [])
+                    if item.get("line") is not None
+                ]
+                second_contours = [
+                    item for item in second_cluster.get("contours", [])
+                    if item.get("line") is not None
+                ]
+
+                if not first_contours or not second_contours:
+                    continue
+
+                first = max(first_contours, key=lambda item: item["length"])
+                second = max(second_contours, key=lambda item: item["length"])
+                first_direction = np.array(first["line"][:2], dtype=np.float32)
+                second_direction = np.array(second["line"][:2], dtype=np.float32)
+                first_point = np.array(first["line"][2:], dtype=np.float32)
+                second_point = np.array(second["line"][2:], dtype=np.float32)
+
+                determinant = self._cross_product(first_direction, second_direction)
+                crossing_angle = np.degrees(np.arcsin(min(1.0, abs(determinant))))
+
+                if crossing_angle < config.MIN_CROSSING_ANGLE_DEGREES:
+                    continue
+
+                point_difference = second_point - first_point
+                first_parameter = self._cross_product(point_difference, second_direction) / determinant
+                second_parameter = self._cross_product(point_difference, first_direction) / determinant
+                intersection = first_point + first_parameter * first_direction
+
+                def is_on_support(contour_object, parameter):
+                    start, end = contour_object["line_endpoints"]
+                    point_on_line = np.array(contour_object["line"][2:], dtype=np.float32)
+                    direction = np.array(contour_object["line"][:2], dtype=np.float32)
+                    start_parameter = np.dot(np.array(start) - point_on_line, direction)
+                    end_parameter = np.dot(np.array(end) - point_on_line, direction)
+                    extension = contour_object["length"] * config.CROSS_SEGMENT_EXTENSION_RATIO
+                    return min(start_parameter, end_parameter) - extension <= parameter <= max(
+                        start_parameter, end_parameter
+                    ) + extension
+
+                if not (
+                    is_on_support(first, first_parameter)
+                    and is_on_support(second, second_parameter)
+                ):
+                    continue
+
+                center_offset = np.linalg.norm(intersection - np.array([radius, radius]))
+                maximum_offset = radius * config.MAX_CROSS_CENTER_OFFSET_RATIO
+
+                if center_offset > maximum_offset:
+                    continue
+
+                angle_score = (
+                    crossing_angle - config.MIN_CROSSING_ANGLE_DEGREES
+                ) / (90.0 - config.MIN_CROSSING_ANGLE_DEGREES)
+                center_score = 1.0 - center_offset / maximum_offset
+                support_balance = min(
+                    first_cluster["total_length"], second_cluster["total_length"]
+                ) / max(first_cluster["total_length"], second_cluster["total_length"])
+                confidence = (
+                    0.55 * angle_score
+                    + 0.30 * center_score
+                    + 0.15 * support_balance
+                )
+
+                if best_crossing is None or confidence > best_crossing["confidence"]:
+                    best_crossing = {
+                        "point": tuple(float(value) for value in intersection),
+                        "angle": float(crossing_angle),
+                        "confidence": float(confidence),
+                    }
+
+        if best_crossing is not None:
+            candidate["crossing_point"] = best_crossing["point"]
+            candidate["crossing_angle"] = best_crossing["angle"]
+            candidate["cross_confidence"] = best_crossing["confidence"]
+
+        return candidate
+
+    def classify_symbol(self, candidate):
+        """Classify the two dominant directions as an X, +, cross, or unknown.
+
+        The score is a deterministic heuristic combining template agreement,
+        near-perpendicularity, and the balance of line support. It is useful
+        for ranking candidates, but is not a probability.
+        """
+
+        clusters = candidate.get("orientation_clusters", [])
+
+        candidate["symbol"] = "unknown"
+        candidate["symbol_confidence"] = 0.0
+        candidate["orientation_separation"] = None
+        self.score_crossing_lines(candidate)
+
+        if len(clusters) < 2:
+            return candidate
+
+        first, second = clusters[:2]
+        observed_angles = (first["angle"], second["angle"])
+        separation = self._orientation_distance(*observed_angles)
+        candidate["orientation_separation"] = separation
+
+        templates = {
+            "X": (45.0, 135.0),
+            "+": (0.0, 90.0),
+        }
+        symbol, template_error = min(
+            (
+                (name, self._template_error(observed_angles, target_angles))
+                for name, target_angles in templates.items()
+            ),
+            key=lambda result: result[1],
+        )
+
+        tolerance = config.SYMBOL_ANGLE_TOLERANCE_DEGREES
+        template_score = max(0.0, 1.0 - template_error / tolerance)
+        perpendicular_score = max(0.0, 1.0 - abs(90.0 - separation) / tolerance)
+        support_balance = min(first["total_length"], second["total_length"]) / max(
+            first["total_length"], second["total_length"]
+        )
+        confidence = (
+            0.5 * template_score
+            + 0.3 * perpendicular_score
+            + 0.2 * support_balance
+        )
+
+        candidate["symbol_confidence"] = confidence
+
+        if (
+            template_score > 0.0
+            and confidence >= config.MIN_SYMBOL_CONFIDENCE
+        ):
+            candidate["symbol"] = symbol
+        elif candidate["cross_confidence"] >= config.MIN_CROSS_CONFIDENCE:
+            candidate["symbol"] = "cross"
+            candidate["symbol_confidence"] = candidate["cross_confidence"]
 
         return candidate
 
