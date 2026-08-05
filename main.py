@@ -89,6 +89,7 @@ while True:
         candidate = detector.compute_line_features(candidate)
         candidate = detector.cluster_orientations(candidate)
         detector.classify_symbol(candidate)
+        detector.validate_candidate(candidate)
 
     # Debug drawing
     if config.DEBUG:
@@ -106,11 +107,12 @@ while True:
             confidence = candidate["confidence"]
             density = candidate["density"]
 
+            marker_color = (0, 255, 0) if candidate["is_marker"] else (0, 165, 255)
             cv2.circle(
                 debug_frame,
                 (x, y),
                 r,
-                (0, 255, 0),
+                marker_color,
                 2
             )
 
@@ -130,6 +132,16 @@ while True:
                 0.5,
                 (0,255,0),
                 2
+            )
+
+            cv2.putText(
+                debug_frame,
+                f"Marker:{candidate['marker_confidence']:.2f}",
+                (x - 35, y - r - 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                marker_color,
+                2,
             )
 
             cv2.putText(

@@ -217,5 +217,37 @@ class SymbolClassificationTests(unittest.TestCase):
         self.assertEqual(candidate["cross_confidence"], 0.0)
 
 
+class CandidateValidationTests(unittest.TestCase):
+    def test_accepts_centered_well_supported_crossing_candidate(self):
+        candidate = {
+            "radius": 50,
+            "confidence": 0.90,
+            "crossing_point": (50.0, 50.0),
+            "cross_confidence": 0.90,
+            "crossing_support_lengths": (80.0, 85.0),
+        }
+
+        MarkerDetector().validate_candidate(candidate)
+
+        self.assertTrue(candidate["is_marker"])
+        self.assertGreater(candidate["marker_confidence"], 0.80)
+        self.assertEqual(candidate["cross_center_offset_ratio"], 0.0)
+        self.assertAlmostEqual(candidate["line_support_ratio"], 0.80)
+
+    def test_rejects_crossing_far_from_circle_center(self):
+        candidate = {
+            "radius": 50,
+            "confidence": 0.95,
+            "crossing_point": (80.0, 50.0),
+            "cross_confidence": 0.95,
+            "crossing_support_lengths": (90.0, 90.0),
+        }
+
+        MarkerDetector().validate_candidate(candidate)
+
+        self.assertFalse(candidate["is_marker"])
+        self.assertGreater(candidate["cross_center_offset_ratio"], 0.45)
+
+
 if __name__ == "__main__":
     unittest.main()

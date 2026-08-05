@@ -405,6 +405,7 @@ class MarkerDetector:
         candidate["crossing_point"] = None
         candidate["crossing_angle"] = None
         candidate["cross_confidence"] = 0.0
+        candidate["crossing_support_lengths"] = None
 
         radius = candidate.get("radius")
         if radius is None:
@@ -486,12 +487,17 @@ class MarkerDetector:
                         "point": tuple(float(value) for value in intersection),
                         "angle": float(crossing_angle),
                         "confidence": float(confidence),
+                        "support_lengths": (
+                            float(first_cluster["total_length"]),
+                            float(second_cluster["total_length"]),
+                        ),
                     }
 
         if best_crossing is not None:
             candidate["crossing_point"] = best_crossing["point"]
             candidate["crossing_angle"] = best_crossing["angle"]
             candidate["cross_confidence"] = best_crossing["confidence"]
+            candidate["crossing_support_lengths"] = best_crossing["support_lengths"]
 
         return candidate
 
@@ -552,6 +558,56 @@ class MarkerDetector:
         elif candidate["cross_confidence"] >= config.MIN_CROSS_CONFIDENCE:
             candidate["symbol"] = "cross"
             candidate["symbol_confidence"] = candidate["cross_confidence"]
+
+        return candidate
+
+    def validate_candidate(self, candidate):
+        """Combine circle, crossing, centering, and support evidence.
+
+        This is the final per-frame acceptance gate. Its confidence ranks
+        candidates; it is deliberately not a probability estimate.
+        """
+
+        candidate["marker_confidence"] = 0.0
+        candidate["is_marker"] = False
+        candidate["cross_center_offset_ratio"] = None
+        candidate["line_support_ratio"] = None
+
+        radius = candidate.get("radius")
+        crossing_point = candidate.get("crossing_point")
+        support_lengths = candidate.get("crossing_support_lengths")
+
+        if radius is None or crossing_point is None or support_lengths is None:
+            return candidate
+
+        crossing_point = np.array(crossing_point, dtype=np.float32)
+        roi_center = np.array([radius, radius], dtype=np.float32)
+        center_offset_ratio = float(np.linalg.norm(crossing_point - roi_center) / radius)
+        support_ratio = min(support_lengths) / (2.0 * radius)
+        candidate["cross_center_offset_ratio"] = center_offset_ratio
+        candidate["line_support_ratio"] = support_ratio
+
+        circle_score = float(np.clip(candidate.get("confidence", 0.0), 0.0, 1.0))
+        crossing_score = float(candidate.get("cross_confidence", 0.0))
+        center_score = max(
+            0.0,
+            1.0 - center_offset_ratio / config.MAX_INTERSECTION_CENTER_OFFSET_RATIO,
+        )
+        support_score = min(1.0, support_ratio)
+        marker_confidence = (
+            0.30 * circle_score
+            + 0.35 * crossing_score
+            + 0.20 * center_score
+            + 0.15 * support_score
+        )
+        candidate["marker_confidence"] = marker_confidence
+
+        candidate["is_marker"] = bool(
+            crossing_score >= config.MIN_CROSS_CONFIDENCE
+            and center_offset_ratio <= config.MAX_INTERSECTION_CENTER_OFFSET_RATIO
+            and support_ratio >= config.MIN_LINE_SUPPORT_RATIO
+            and marker_confidence >= config.MIN_MARKER_CONFIDENCE
+        )
 
         return candidate
 

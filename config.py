@@ -104,3 +104,12 @@ MIN_CROSSING_ANGLE_DEGREES = 20.0
 MAX_CROSS_CENTER_OFFSET_RATIO = 0.95
 CROSS_SEGMENT_EXTENSION_RATIO = 0.15
 MIN_CROSS_CONFIDENCE = 0.45
+
+# =========================
+# Final Candidate Validation
+# =========================
+# The crossing should be close to the marker centre and both directions should
+# span a meaningful fraction of the marker diameter.
+MAX_INTERSECTION_CENTER_OFFSET_RATIO = 0.45
+MIN_LINE_SUPPORT_RATIO = 0.30
+MIN_MARKER_CONFIDENCE = 0.65
