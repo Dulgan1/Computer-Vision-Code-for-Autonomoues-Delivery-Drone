@@ -53,6 +53,7 @@ cv2.destroyAllWindows()"""
 from camera import Camera
 from preprocess import Preprocessor
 from detector import MarkerDetector
+from tracker import MarkerTracker
 
 import cv2
 import config
@@ -63,6 +64,8 @@ camera = Camera()
 preprocessor = Preprocessor()
 
 detector = MarkerDetector()
+
+tracker = MarkerTracker()
 
 
 while True:
@@ -90,6 +93,8 @@ while True:
         candidate = detector.cluster_orientations(candidate)
         detector.classify_symbol(candidate)
         detector.validate_candidate(candidate)
+
+    tracked_target = tracker.update(candidates)
 
     # Debug drawing
     if config.DEBUG:
@@ -229,6 +234,22 @@ while True:
             cv2.imshow(
                 "ROI",
                 roi_display
+            )
+
+        if tracked_target is not None:
+            track_x, track_y = (round(value) for value in tracked_target["center"])
+            track_color = (255, 255, 0) if tracked_target["is_stable"] else (0, 255, 255)
+            track_state = "stable" if tracked_target["is_stable"] else "acquiring"
+            visibility = "visible" if tracked_target["visible"] else "held"
+            cv2.circle(debug_frame, (track_x, track_y), 6, track_color, -1)
+            cv2.putText(
+                debug_frame,
+                f"Track {tracked_target['track_id']}: {track_state}, {visibility}",
+                (10, 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                track_color,
+                2,
             )
 
         cv2.imshow(

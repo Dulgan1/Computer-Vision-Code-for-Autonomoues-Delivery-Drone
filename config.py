@@ -71,6 +71,12 @@ SEARCH_WINDOW = 80
 
 FULL_SCAN_INTERVAL = 15
 
+# Temporal tracking of final, validated marker candidates.
+TRACK_SMOOTHING_ALPHA = 0.35
+TRACK_ASSOCIATION_DISTANCE = 80
+TRACK_CONFIRMATION_FRAMES = 3
+TRACK_MAX_MISSED_FRAMES = 5
+
 #===========================
 # Line Detection
 #===========================
