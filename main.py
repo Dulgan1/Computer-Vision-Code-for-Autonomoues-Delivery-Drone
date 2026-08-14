@@ -54,9 +54,11 @@ from camera import Camera
 from preprocess import Preprocessor
 from detector import MarkerDetector
 from tracker import MarkerTracker
+from pose import CameraModel, TargetPoseEstimator
 
 import cv2
 import config
+import numpy as np
 
 
 camera = Camera()
@@ -66,6 +68,16 @@ preprocessor = Preprocessor()
 detector = MarkerDetector()
 
 tracker = MarkerTracker()
+
+pose_estimator = None
+if config.POSE_ENABLED:
+    if config.MARKER_DIAMETER_METERS is None:
+        raise ValueError("MARKER_DIAMETER_METERS is required when POSE_ENABLED is True.")
+
+    pose_estimator = TargetPoseEstimator(
+        CameraModel.load(config.CAMERA_CALIBRATION_FILE),
+        config.MARKER_DIAMETER_METERS,
+    )
 
 
 while True:
@@ -95,6 +107,9 @@ while True:
         detector.validate_candidate(candidate)
 
     tracked_target = tracker.update(candidates)
+    pose_estimate = None
+    if pose_estimator is not None:
+        pose_estimate = pose_estimator.estimate(tracked_target)
 
     # Debug drawing
     if config.DEBUG:
@@ -252,6 +267,17 @@ while True:
                 2,
             )
 
+        if pose_estimate is not None:
+            cv2.putText(
+                debug_frame,
+                f"Bearing: {np.degrees(pose_estimate['horizontal_angle_rad']):.1f} deg",
+                (10, 42),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 0),
+                2,
+            )
+
         cv2.imshow(
             "Camera",
             debug_frame
@@ -262,9 +288,7 @@ while True:
             edges
         )
 
-    key = cv2.waitKey(
-        1
-        )
+    key = cv2.waitKey(1)
 
     if key == ord('q'):
         break

@@ -11,9 +11,9 @@ DEBUG = True
 # CAMERA
 # ===========================
 
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 
-FRAME_WIDTH = 320
+FRAME_WIDTH = 640
 FRAME_HEIGHT = 240
 
 FPS = 15
@@ -76,6 +76,15 @@ TRACK_SMOOTHING_ALPHA = 0.35
 TRACK_ASSOCIATION_DISTANCE = 80
 TRACK_CONFIRMATION_FRAMES = 3
 TRACK_MAX_MISSED_FRAMES = 5
+
+# =========================
+# Camera Calibration and Relative Position
+# =========================
+# Generate this file with calibrate_camera.py using images from the deployment
+# camera. Pose output remains disabled until these values are supplied.
+POSE_ENABLED = False
+CAMERA_CALIBRATION_FILE = "camera_calibration.npz"
+MARKER_DIAMETER_METERS = None
 
 #===========================
 # Line Detection
