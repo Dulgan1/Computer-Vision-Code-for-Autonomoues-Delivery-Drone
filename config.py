@@ -17,6 +17,12 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 240
 
 FPS = 15
+CAMERA_BUFFER_SIZE = 1
+
+# Print average detection-pipeline time every N frames when enabled. Drawing
+# and OpenCV window display are deliberately excluded from this measurement.
+PERFORMANCE_LOGGING = False
+PERFORMANCE_LOG_INTERVAL = 60
 
 
 # ===========================

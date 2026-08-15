@@ -55,10 +55,12 @@ from preprocess import Preprocessor
 from detector import MarkerDetector
 from tracker import MarkerTracker
 from pose import CameraModel, TargetPoseEstimator
+from guidance import ImageGuidance
 
 import cv2
 import config
 import numpy as np
+from time import perf_counter
 
 
 camera = Camera()
@@ -68,6 +70,10 @@ preprocessor = Preprocessor()
 detector = MarkerDetector()
 
 tracker = MarkerTracker()
+
+image_guidance = ImageGuidance()
+
+pipeline_times = []
 
 pose_estimator = None
 if config.POSE_ENABLED:
@@ -86,6 +92,8 @@ while True:
 
     if frame is None:
         break
+
+    pipeline_start = perf_counter()
 
     # Phase 2 & 3
     gray, edges = preprocessor.process(frame)
@@ -107,9 +115,18 @@ while True:
         detector.validate_candidate(candidate)
 
     tracked_target = tracker.update(candidates)
+    guidance_estimate = image_guidance.estimate(tracked_target, frame.shape)
     pose_estimate = None
     if pose_estimator is not None:
         pose_estimate = pose_estimator.estimate(tracked_target)
+
+    if config.PERFORMANCE_LOGGING:
+        pipeline_times.append(perf_counter() - pipeline_start)
+
+        if len(pipeline_times) >= config.PERFORMANCE_LOG_INTERVAL:
+            average_ms = 1000.0 * sum(pipeline_times) / len(pipeline_times)
+            print(f"Average detection pipeline: {average_ms:.1f} ms/frame")
+            pipeline_times.clear()
 
     # Debug drawing
     if config.DEBUG:
@@ -272,6 +289,21 @@ while True:
                 debug_frame,
                 f"Bearing: {np.degrees(pose_estimate['horizontal_angle_rad']):.1f} deg",
                 (10, 42),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 0),
+                2,
+            )
+
+        if guidance_estimate is not None:
+            cv2.putText(
+                debug_frame,
+                (
+                    "Image error: "
+                    f"x={guidance_estimate['horizontal_error']:+.2f}, "
+                    f"y={guidance_estimate['vertical_error']:+.2f}"
+                ),
+                (10, 64),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (255, 255, 0),

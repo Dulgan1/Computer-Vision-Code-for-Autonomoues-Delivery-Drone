@@ -15,6 +15,9 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.cap.set(cv2.CAP_PROP_FPS, fps)
+        # Supported by V4L2 cameras; ignored harmlessly by backends that do
+        # not expose capture-buffer control. It reduces stale-frame latency.
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, config.CAMERA_BUFFER_SIZE)
 
     def read(self):
         success, frame = self.cap.read()

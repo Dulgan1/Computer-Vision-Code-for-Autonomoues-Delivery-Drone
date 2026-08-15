@@ -56,7 +56,22 @@ import config
 
 class MarkerDetector:
     def __init__(self):
-        pass
+        # Radius is bounded by configuration, so this remains a small cache.
+        # Reusing masks avoids two array allocations per circle candidate.
+        self._circle_masks = {}
+
+    def _circle_mask(self, radius, thickness):
+        """Return a reusable circle mask for a square ROI of side ``2 * radius``."""
+
+        cache_key = (radius, thickness)
+        mask = self._circle_masks.get(cache_key)
+
+        if mask is None:
+            mask = np.zeros((2 * radius, 2 * radius), dtype=np.uint8)
+            cv2.circle(mask, (radius, radius), radius, 255, thickness)
+            self._circle_masks[cache_key] = mask
+
+        return mask
 
     def detect_circles(self, gray, edges):
         """
@@ -110,18 +125,7 @@ class MarkerDetector:
 
             # ROI Extraction
             roi_edges = edges[y-r:y+r, x-r:x+r]
-            mask = np.zeros(
-                roi_edges.shape,
-                dtype=np.uint8
-                )
-            
-            cv2.circle(
-                mask, 
-                (r, r),
-                r,
-                255,
-                thickness=2
-                )
+            mask = self._circle_mask(r, thickness=2)
 
             edge_pixels = cv2.countNonZero(
                 cv2.bitwise_and(
@@ -175,16 +179,7 @@ class MarkerDetector:
 
         roi = image[y-r:y+r, x-r:x+r]
 
-        # Circular mask
-        mask = np.zeros(roi.shape, dtype=np.uint8)
-
-        cv2.circle(
-            mask,
-            (r, r),
-            r,
-            255,
-            -1
-        )
+        mask = self._circle_mask(r, thickness=-1)
 
         roi = cv2.bitwise_and(roi, mask)
 

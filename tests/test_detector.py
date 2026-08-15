@@ -8,6 +8,17 @@ from detector import MarkerDetector
 
 
 class FilterContoursTests(unittest.TestCase):
+    def test_reuses_circle_masks_for_matching_radius_and_style(self):
+        detector = MarkerDetector()
+
+        first = detector._circle_mask(50, thickness=-1)
+        second = detector._circle_mask(50, thickness=-1)
+        outline = detector._circle_mask(50, thickness=2)
+
+        self.assertIs(first, second)
+        self.assertIsNot(first, outline)
+        self.assertEqual(first.shape, (100, 100))
+
     def test_extract_roi_preserves_binary_edge_pixels(self):
         edges = np.zeros((20, 20), dtype=np.uint8)
         edges[10, 10] = 255
