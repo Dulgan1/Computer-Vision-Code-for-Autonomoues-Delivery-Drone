@@ -23,6 +23,7 @@ CAMERA_BUFFER_SIZE = 1
 # and OpenCV window display are deliberately excluded from this measurement.
 PERFORMANCE_LOGGING = False
 PERFORMANCE_LOG_INTERVAL = 60
+VERBOSE_PIPELINE_LOGGING = False
 
 
 # ===========================
@@ -77,7 +78,11 @@ SEARCH_WINDOW = 80
 
 FULL_SCAN_INTERVAL = 15
 
-# Temporal tracking of final, validated marker candidates.
+# ==========================
+# Temporal tracking of final,
+# validated marker candidates.
+# ==========================
+
 TRACK_SMOOTHING_ALPHA = 0.35
 TRACK_ASSOCIATION_DISTANCE = 80
 TRACK_CONFIRMATION_FRAMES = 3

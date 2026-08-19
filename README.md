@@ -49,6 +49,8 @@ USB/onboard camera
 | `detector.py` | Owns circle detection, ROI geometry, crossing detection, and validation. |
 | `tracker.py` | Tracks and smooths one validated marker through time. |
 | `guidance.py` | Emits unitless image-centre error only for a fresh stable target. |
+| `pipeline.py` | Single non-UI processing interface shared by live capture and video evaluation. |
+| `autonomy_adapter.py` | Converts fresh guidance into a JSON-compatible perception message; it sends no vehicle commands. |
 | `calibrate_camera.py` | Calibrates the deployment camera from checkerboard photographs. |
 | `pose.py` | Creates calibrated camera rays and optional relative-position estimates. |
 | `main.py` | Runs the pipeline and its debug views. |
@@ -325,6 +327,30 @@ positive `e_y` means below it. Apparent marker radius is also reported.
 These outputs are unitless, not metre offsets, and are intended for simulation
 or a future autonomy interface rather than direct flight commands.
 
+### Autonomy-facing perception message
+
+`AutonomyTargetAdapter` converts fresh guidance into a transport-neutral,
+JSON-compatible message:
+
+```json
+{
+  "schema_version": 1,
+  "target_available": true,
+  "track_id": 4,
+  "target_point": [321.5, 119.0],
+  "horizontal_error": 0.10,
+  "vertical_error": -0.20,
+  "normalized_radius": 0.25,
+  "marker_confidence": 0.92
+}
+```
+
+When no fresh, stable visual target exists, `target_available` is `false` and
+all measurement fields are `null`. This is an intentional safety contract:
+the CV system never emits a held/lost track as if it were a live measurement.
+The adapter does not choose a network, serial, ROS, or MAVLink transport and
+does not issue any vehicle command.
+
 ## Calibration and relative position
 
 `calibrate_camera.py` estimates the deployment camera's intrinsic matrix and
@@ -361,6 +387,67 @@ Calibration remains disabled by default until real calibration data exists.
 
 ## Debugging, testing, and performance
 
+## Configuration reference
+
+Every `config.py` setting, including active, optional, and currently inactive
+settings, is explained in plain language in the
+[configuration guide](docs/configuration-guide.md). It explains what each
+setting controls, what happens when it is raised or lowered, and a safe order
+for tuning with recorded video.
+
+The following is the complete at-a-glance reference. **Active** means the
+current program reads the value. **Inactive** means it is retained for planned
+or retired functionality and changing it currently does nothing. **Optional**
+means it matters only when the related feature is enabled.
+
+| Configuration setting | Status | Plain-language effect |
+| --- | --- | --- |
+| `DEBUG` | Active | Shows or hides debug windows. `True` helps development but costs CPU; it does not change the detection decision. |
+| `CAMERA_INDEX` | Active | Chooses the camera number, such as laptop camera `0` or a USB camera often at `1+`. |
+| `FRAME_WIDTH`, `FRAME_HEIGHT` | Active requests | Ask the camera for image size. More pixels can see smaller markers but cost CPU; the camera can ignore unsupported sizes. |
+| `FPS` | Active request | Asks for camera frames per second. Higher values can improve responsiveness but cost more processing. |
+| `CAMERA_BUFFER_SIZE` | Active where supported | Requests a short camera queue to reduce delayed, stale frames. |
+| `PERFORMANCE_LOGGING` | Active | Enables periodic pipeline timing output. |
+| `PERFORMANCE_LOG_INTERVAL` | Active | Number of frames used for each printed timing average; lower reports sooner, higher is steadier. |
+| `VERBOSE_PIPELINE_LOGGING` | Active | Prints the autonomy-facing target message every frame; useful briefly, but expensive/noisy if left on. |
+| `GAUSSIAN_KERNEL` | Active | Blur size before edge detection. Larger removes more noise but can erase thin marker edges; values normally need to be odd. |
+| `ADAPTIVE_BLOCK_SIZE` | Inactive | Reserved for planned adaptive thresholding; has no effect today. |
+| `ADAPTIVE_C` | Inactive | Reserved for planned adaptive thresholding; has no effect today. |
+| `MORPH_KERNEL_SIZE` | Inactive | Reserved for planned morphology; has no effect today. |
+| `CANNY_LOW` | Active | Weak-edge threshold. Lower keeps faint edges and more noise; higher removes weak edges. |
+| `CANNY_HIGH` | Active | Strong-edge threshold. Higher requires clearer edges and reduces clutter; it must stay above `CANNY_LOW`. |
+| `HOUGH_DP` | Active | Circle-search resolution scale. Lower is more detailed/costly; higher is coarser/faster. |
+| `HOUGH_MIN_DIST` | Active | Minimum separation between circle centres. Higher removes nearby duplicates; lower allows more candidates. |
+| `HOUGH_PARAM2` | Active | Circle-vote strictness. Higher finds fewer/cleaner circles; lower finds more circles and more false positives. |
+| `MIN_RADIUS`, `MAX_RADIUS` | Active | Smallest/largest acceptable circle radius in pixels. Widening the range detects more sizes but increases work and false candidates. |
+| `MIN_EDGE_DENSITY` | Active | Required edge evidence around a circle. Higher rejects weak circles; lower accepts worn circles and more false ones. |
+| `DUPLICATE_DISTANCE` | Active | How close two circle centres can be before one is treated as a duplicate. |
+| `SEARCH_WINDOW` | Inactive | Reserved for future tracker-only region searching; has no effect today. |
+| `FULL_SCAN_INTERVAL` | Inactive | Reserved for future periodic full-image scans; has no effect today. |
+| `TRACK_SMOOTHING_ALPHA` | Active | Balance between smoothness and responsiveness. Near `0` is stable but slow; near `1` follows raw measurements and jitters. |
+| `TRACK_ASSOCIATION_DISTANCE` | Active | Largest allowed motion between frames for a detection to remain the same track. Higher tolerates motion but risks switching targets. |
+| `TRACK_CONFIRMATION_FRAMES` | Active | Consecutive detections required before a track is stable. Higher is safer but slower. |
+| `TRACK_MAX_MISSED_FRAMES` | Active | Brief loss tolerated before deleting a track. Held tracks never create active guidance. |
+| `POSE_ENABLED` | Optional | Enables calibrated bearing/range features. Leave `False` for the current uncalibrated workflow. |
+| `CAMERA_CALIBRATION_FILE` | Optional | Path to camera calibration data; used only when pose is enabled. |
+| `MARKER_DIAMETER_METERS` | Optional | Physical marker size for optional range approximation; unused while pose is disabled. |
+| `HOUGH_LINE_THRESHOLD`, `MIN_LINE_LENGTH`, `MAX_LINE_GAP` | Inactive | Old Hough-line settings. The project now uses contour fitting, so these do nothing. |
+| `MIN_CONTOUR_AREA` | Active | Rejects tiny contour blobs. Higher removes more noise but can lose thin/distant strokes. |
+| `ORIENTATION_CLUSTER_TOLERANCE_DEGREES` | Active | Angle allowance for contour edges to count as one stroke. Higher merges more fragments; lower separates directions more strictly. |
+| `SYMBOL_ANGLE_TOLERANCE_DEGREES` | Active | Allowance for optional X/+ labels. Higher accepts more rotated symbols as X/+; generic `cross` remains available. |
+| `MIN_SYMBOL_CONFIDENCE` | Active | Score needed for the specific X/+ label. Higher is stricter; generic crossing uses separate rules. |
+| `MIN_CROSSING_ANGLE_DEGREES` | Active | Rejects two directions that are nearly parallel. Higher requires a clearer cross. |
+| `MAX_CROSS_CENTER_OFFSET_RATIO` | Active | Broad crossing check: intersection must remain within the circle. |
+| `CROSS_SEGMENT_EXTENSION_RATIO` | Active | Small extra line extension allowed for broken edges. Higher is more forgiving but can accept unrelated lines. |
+| `MIN_CROSS_CONFIDENCE` | Active | Minimum geometric crossing score before a generic cross is accepted. |
+| `MAX_INTERSECTION_CENTER_OFFSET_RATIO` | Active | Final strict centring limit for the crossing. Lower requires a more centred marker. |
+| `MIN_LINE_SUPPORT_RATIO` | Active | Minimum visible length for the weaker stroke relative to circle diameter. Higher requires clearer strokes. |
+| `MIN_MARKER_CONFIDENCE` | Active | Final acceptance threshold. Higher is safer/stricter; lower finds more targets and can add false positives. |
+
+For recommended tuning order, current values, examples, and fuller
+explanations of each trade-off, use the linked configuration guide before
+changing a value.
+
 Run the live system:
 
 ```bash
@@ -381,6 +468,19 @@ Run automated tests:
 ```bash
 venv/bin/python -m unittest discover -s tests -v
 ```
+
+Evaluate a recorded USB-camera video with the same non-UI pipeline used by the
+application:
+
+```bash
+venv/bin/python evaluate_video.py videos/marker_test.mp4 --csv evaluation.csv
+```
+
+The CSV has one row per frame, including candidate count, validated-marker
+count, track status, image guidance errors, and processing time. The command
+also reports marker/stable-track coverage plus mean and 95th-percentile frame
+processing time. This makes threshold tuning reproducible rather than relying
+only on visual inspection.
 
 Enable timing on the Raspberry Pi:
 

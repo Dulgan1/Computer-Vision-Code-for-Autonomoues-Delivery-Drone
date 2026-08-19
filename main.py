@@ -51,11 +51,9 @@ cam.release()
 
 cv2.destroyAllWindows()"""
 from camera import Camera
-from preprocess import Preprocessor
-from detector import MarkerDetector
-from tracker import MarkerTracker
 from pose import CameraModel, TargetPoseEstimator
-from guidance import ImageGuidance
+from pipeline import LandingMarkerPipeline
+from autonomy_adapter import AutonomyTargetAdapter
 
 import cv2
 import config
@@ -65,13 +63,9 @@ from time import perf_counter
 
 camera = Camera()
 
-preprocessor = Preprocessor()
+pipeline = LandingMarkerPipeline()
 
-detector = MarkerDetector()
-
-tracker = MarkerTracker()
-
-image_guidance = ImageGuidance()
+autonomy_adapter = AutonomyTargetAdapter()
 
 pipeline_times = []
 
@@ -95,30 +89,19 @@ while True:
 
     pipeline_start = perf_counter()
 
-    # Phase 2 & 3
-    gray, edges = preprocessor.process(frame)
-
-    # Phase 4
-    candidates = detector.detect_circles(gray, edges)
-
-    # Phase 5: symbol pipeline.  The binary edge image is used here rather
-    # than grayscale so contours represent marker edges instead of the whole
-    # non-zero image region.  Keep this outside DEBUG for production parity.
-    for candidate in candidates:
-        candidate = detector.extract_roi(edges, candidate)
-        candidate = detector.find_contours(candidate)
-        candidate = detector.filter_contours(candidate)
-        candidate = detector.fit_lines(candidate)
-        candidate = detector.compute_line_features(candidate)
-        candidate = detector.cluster_orientations(candidate)
-        detector.classify_symbol(candidate)
-        detector.validate_candidate(candidate)
-
-    tracked_target = tracker.update(candidates)
-    guidance_estimate = image_guidance.estimate(tracked_target, frame.shape)
+    pipeline_result = pipeline.process(frame)
+    gray = pipeline_result["gray"]
+    edges = pipeline_result["edges"]
+    candidates = pipeline_result["candidates"]
+    tracked_target = pipeline_result["tracked_target"]
+    guidance_estimate = pipeline_result["guidance"]
+    autonomy_message = autonomy_adapter.build(guidance_estimate)
     pose_estimate = None
     if pose_estimator is not None:
         pose_estimate = pose_estimator.estimate(tracked_target)
+
+    if config.VERBOSE_PIPELINE_LOGGING:
+        print(autonomy_message)
 
     if config.PERFORMANCE_LOGGING:
         pipeline_times.append(perf_counter() - pipeline_start)
