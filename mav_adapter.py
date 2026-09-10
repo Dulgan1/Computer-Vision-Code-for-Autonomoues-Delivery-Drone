@@ -7,8 +7,8 @@ IMG_WIDTH = 1920.0
 IMG_HEIGHT = 1080.0
 
 # Replace with your specific wide-angle lens FOV specifications
-HFOV_DEG = 90.0  
-VFOV_DEG = 60.0  
+HFOV_DEG = 67.5 
+VFOV_DEG = 42.5
 
 # Pre-calculate center points and FOV constants for loop efficiency
 CX = IMG_WIDTH / 2.0
@@ -56,3 +56,13 @@ def send_landing_target_pixels(pixhawk, marker_pixel_list):
         size_x=0.0,
         size_y=0.0
     )
+
+
+def drop_payload(pixhawk, servo_channel, servo_open_pwm):
+    """Actuates the servo mechanism."""
+    pixhawk.mav.command_long_send(
+        pixhawk.target_system, pixhawk.target_component,
+        mavutil.mavlink.MAV_CMD_DO_SET_SERVO, 0,
+        servo_channel, servo_open_pwm, 0, 0, 0, 0, 0
+    )
+    print("PAYLOAD DROPPED!")

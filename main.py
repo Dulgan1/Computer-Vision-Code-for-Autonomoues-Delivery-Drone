@@ -54,11 +54,13 @@ from camera import Camera
 from pose import CameraModel, TargetPoseEstimator
 from pipeline import LandingMarkerPipeline
 from autonomy_adapter import AutonomyTargetAdapter
+from mav_adapter import send_landing_target_pixels, drop_payload
 
 import cv2
 import config
 import numpy as np
-from time import perf_counter
+import time
+from pymavlink import mavutil
 
 
 camera = Camera()
@@ -70,6 +72,23 @@ autonomy_adapter = AutonomyTargetAdapter()
 pipeline_times = []
 
 pose_estimator = None
+
+# --- Payload Drop Parameters ---
+ALIGNMENT_THRESHOLD = 0.05  # Maximum acceptable error (e.g., 5% off-center)
+STABLE_FRAMES_REQUIRED = 10 # Consecutive frames required to confirm stable alignment
+stable_alignment_count = 0
+payload_dropped = False
+
+print("Connecting to Pixhawk...")
+try:
+    pixhawk = mavutil.mavlink_connection('/dev/ttyAMA0', baud=921600)
+    pixhawk.wait_heartbeat(timeout=5)
+    print("MAVLink connection established.")
+except Exception as e:
+    print(f"Failed to connect to Pixhawk: {e}")
+print("Connection established!")
+
+
 if config.POSE_ENABLED:
     if config.MARKER_DIAMETER_METERS is None:
         raise ValueError("MARKER_DIAMETER_METERS is required when POSE_ENABLED is True.")
@@ -87,7 +106,7 @@ while True:
     if frame is None:
         break
 
-    pipeline_start = perf_counter()
+    pipeline_start = time.perf_counter()
 
     pipeline_result = pipeline.process(frame)
     gray = pipeline_result["gray"]
@@ -103,8 +122,30 @@ while True:
     if config.VERBOSE_PIPELINE_LOGGING:
         print(autonomy_message)
 
+    if guidance_estimate.get("target_point") is not None:
+        send_landing_target_pixels(pixhawk, guidance_estimate.get("target_point"))
+        print(f"Transmitting target data: {guidance_estimate.get('target_point')}")
+
+        if not payload_dropped and tracked_target and tracked_target.get('is_stable'):
+            x_error = abs(guidance_estimate.get("horizontal_error"))
+            y_error = abs(guidance_estimate.get("vertical_error"))
+
+            if x_error < ALIGNMENT_THRESHOLD and y_error < ALIGNMENT_THRESHOLD:
+                stable_alignment_count += 1
+                print(f"Stable alignment count: {stable_alignment_count}/{STABLE_FRAMES_REQUIRED}")
+
+                if stable_alignment_count >= STABLE_FRAMES_REQUIRED:
+                    drop_payload(pixhawk, servo_channel=9, servo_open_pwm=2000)
+                    payload_dropped = True
+            else:
+                # Reset stable alignment count if the error exceeds the threshold 
+                stable_alignment_count = 0
+        elif not tracked_target or not tracked_target.get('is_stable'):
+            # Reset stable alignment count if the target is lost or unstable
+            stable_alignment_count = 0
+
     if config.PERFORMANCE_LOGGING:
-        pipeline_times.append(perf_counter() - pipeline_start)
+        pipeline_times.append(time.perf_counter() - pipeline_start)
 
         if len(pipeline_times) >= config.PERFORMANCE_LOG_INTERVAL:
             average_ms = 1000.0 * sum(pipeline_times) / len(pipeline_times)

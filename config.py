@@ -21,9 +21,9 @@ CAMERA_BUFFER_SIZE = 1
 
 # Print average detection-pipeline time every N frames when enabled. Drawing
 # and OpenCV window display are deliberately excluded from this measurement.
-PERFORMANCE_LOGGING = False
+PERFORMANCE_LOGGING = True
 PERFORMANCE_LOG_INTERVAL = 60
-VERBOSE_PIPELINE_LOGGING = False
+VERBOSE_PIPELINE_LOGGING = True
 
 
 # ===========================
@@ -60,14 +60,14 @@ CANNY_HIGH = 120
 HOUGH_DP = 1.2
 HOUGH_MIN_DIST = 40
 HOUGH_PARAM2 = 20
-MIN_RADIUS = 40
+MIN_RADIUS = 30
 MAX_RADIUS = 100
 
 # ==========================
 # Circle Validation
 # ==========================
 
-MIN_EDGE_DENSITY = 0.50      # Tune experimentally
+MIN_EDGE_DENSITY = 0.40      # Tune experimentally
 DUPLICATE_DISTANCE = 10       # pixels
 
 # ===========================
@@ -85,7 +85,7 @@ FULL_SCAN_INTERVAL = 15
 
 TRACK_SMOOTHING_ALPHA = 0.35
 TRACK_ASSOCIATION_DISTANCE = 80
-TRACK_CONFIRMATION_FRAMES = 3
+TRACK_CONFIRMATION_FRAMES = 2
 TRACK_MAX_MISSED_FRAMES = 5
 
 # =========================
@@ -109,7 +109,7 @@ MAX_LINE_GAP = 5
 # =========================
 # Contour Filtering
 # ==========================
-MIN_CONTOUR_AREA = 40
+MIN_CONTOUR_AREA = 30
 
 # =========================
 # Orientation Clustering
@@ -138,4 +138,4 @@ MIN_CROSS_CONFIDENCE = 0.45
 # span a meaningful fraction of the marker diameter.
 MAX_INTERSECTION_CENTER_OFFSET_RATIO = 0.45
 MIN_LINE_SUPPORT_RATIO = 0.30
-MIN_MARKER_CONFIDENCE = 0.65
+MIN_MARKER_CONFIDENCE = 0.55
