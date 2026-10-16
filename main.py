@@ -1,55 +1,3 @@
-"""import cv2
-import time
-
-from camera import Camera
-from preprocess import Preprocessor
-import detector
-
-cam = Camera()
-prep = Preprocessor()
-#marker_detector = detector.MarkerDetector()
-previous = time.time()
-
-while True:
-
-    frame = cam.read()
-
-    if frame is None:
-        break
-
-    current = time.time()
-    fps = 1/ (current - previous)
-    previous = current
-    
-    cv2.putText(
-        frame,
-        f"FPS: {fps:.1f}",
-        (10, 20),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (0, 255, 0),
-        2,
-    )
-
-    gray, edges = prep.process(frame)
-    circles = detector.MarkerDetector.detect_circles(edges, gray)
-
-    display = frame.copy()
-
-    #cv2.imshow("Original", frame)
-    for candidate in circles:
-        x, y, r = candidate["center"][0], candidate["center"][1], candidate["radius"]
-        cv2.circle(display, (x, y), r, (0, 255, 0), 2)
-        cv2.circle(display, (x, y), 2, (0, 0, 255), -1)
-
-    cv2.imshow("Circle Candidates", display)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cam.release()
-
-cv2.destroyAllWindows()"""
 from camera import Camera
 from pose import CameraModel, TargetPoseEstimator
 from pipeline import LandingMarkerPipeline
@@ -82,11 +30,16 @@ payload_dropped = False
 print("Connecting to Pixhawk...")
 try:
     pixhawk = mavutil.mavlink_connection('/dev/ttyAMA0', baud=921600)
-    pixhawk.wait_heartbeat(timeout=5)
+    heartbeat = pixhawk.wait_heartbeat(timeout=5)
+    if heartbeat is None:
+        raise TimeoutError("No Pixhawk heartbeat received within 5 seconds.")
+
     print("MAVLink connection established.")
 except Exception as e:
-    print(f"Failed to connect to Pixhawk: {e}")
-print("Connection established!")
+    camera.release()
+    cv2.destroyAllWindows()
+    raise SystemExit(f"Pixhawk connection failed: {e}")
+#print("Connection established!")
 
 
 if config.POSE_ENABLED:
@@ -122,11 +75,15 @@ while True:
     if config.VERBOSE_PIPELINE_LOGGING:
         print(autonomy_message)
 
-    if guidance_estimate.get("target_point") is not None:
-        send_landing_target_pixels(pixhawk, guidance_estimate.get("target_point"))
-        print(f"Transmitting target data: {guidance_estimate.get('target_point')}")
+    if guidance_estimate is None:
+        # A missing guidance message means the target is absent, unstable, or
+        # held after a missed frame. Alignment must be consecutive live frames.
+        stable_alignment_count = 0
+    else:
+        send_landing_target_pixels(pixhawk, guidance_estimate["target_point"])
+        print(f"Transmitting target data: {guidance_estimate['target_point']}")
 
-        if not payload_dropped and tracked_target and tracked_target.get('is_stable'):
+        if not payload_dropped:
             x_error = abs(guidance_estimate.get("horizontal_error"))
             y_error = abs(guidance_estimate.get("vertical_error"))
 
@@ -138,11 +95,8 @@ while True:
                     drop_payload(pixhawk, servo_channel=9, servo_open_pwm=2000)
                     payload_dropped = True
             else:
-                # Reset stable alignment count if the error exceeds the threshold 
+                # The marker is live but no longer sufficiently centred.
                 stable_alignment_count = 0
-        elif not tracked_target or not tracked_target.get('is_stable'):
-            # Reset stable alignment count if the target is lost or unstable
-            stable_alignment_count = 0
 
     if config.PERFORMANCE_LOGGING:
         pipeline_times.append(time.perf_counter() - pipeline_start)

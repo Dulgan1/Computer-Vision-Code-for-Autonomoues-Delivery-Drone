@@ -12,12 +12,17 @@ machine learning, GPU processing, CUDA, TensorRT, or cloud services. Every
 result comes from inspectable image evidence and geometry.
 
 ```text
-camera frame -> validated marker -> stable temporal track -> image alignment error
+camera frame -> validated marker -> stable temporal track -> image alignment
+             -> body-frame angle target -> Pixhawk / payload decision
 ```
 
-DroneCV is perception only. It does not command motors or bypass a flight
-controller. A separate autonomy subsystem must apply safety gates before using
-its output.
+The reusable vision pipeline is a perception subsystem: it neither drives
+motors nor bypasses the flight controller. The current `main.py` integration
+does, however, publish MAVLink landing-target angles to a connected Pixhawk and
+contains a configurable payload-servo release gate. Those are integration
+features, not proof that an autonomous flight or release is safe. Flight-mode,
+arming, geofence, altitude, operator-override, and abort decisions remain the
+responsibility of the flight-controller/autonomy system and operating crew.
 
 ## Marker and project scope
 
@@ -39,7 +44,9 @@ USB/onboard camera
   -> masked binary circular ROI -> contours
   -> fitted lines -> orientation clusters -> crossing verification
   -> final per-frame marker validation -> temporal tracking
-  -> normalized image guidance / optional calibrated camera ray
+  -> normalized image guidance
+  -> pixel-to-body-frame angle conversion -> MAVLink LANDING_TARGET
+  -> consecutive-alignment gate -> optional payload-servo command
 ```
 
 | Module | Responsibility |
@@ -51,9 +58,10 @@ USB/onboard camera
 | `guidance.py` | Emits unitless image-centre error only for a fresh stable target. |
 | `pipeline.py` | Single non-UI processing interface shared by live capture and video evaluation. |
 | `autonomy_adapter.py` | Converts fresh guidance into a JSON-compatible perception message; it sends no vehicle commands. |
+| `mav_adapter.py` | Converts live marker pixels to approximate body-frame angular offsets and sends MAVLink messages; also contains the servo command helper. |
 | `calibrate_camera.py` | Calibrates the deployment camera from checkerboard photographs. |
 | `pose.py` | Creates calibrated camera rays and optional relative-position estimates. |
-| `main.py` | Runs the pipeline and its debug views. |
+| `main.py` | Opens camera and Pixhawk connections, runs the pipeline, transmits fresh landing targets, applies the current release gate, and optionally shows debug views. |
 
 ## Image processing workflow
 
@@ -312,20 +320,30 @@ A target becomes stable after `TRACK_CONFIRMATION_FRAMES` detections. It is
 held for a limited number of missed frames, marked `visible = False` while
 held, then expires. Held targets are never treated as fresh guidance.
 
-### Uncalibrated guidance
+### Image coordinates and uncalibrated guidance
+
+OpenCV uses an image coordinate system whose origin is the **top-left pixel**:
+`x`/`u` increases to the right and `y`/`v` increases downward. The image centre
+is `(W/2,H/2)`. `target_point` is the preferred landing point in these full-frame
+pixel coordinates: the measured crossing if one exists, otherwise the detected
+circle centre. It is not an offset and it is not a metre position.
 
 For a stable and visible target at pixel `(u,v)` in an image of width `W` and
-height `H`, `guidance.py` emits:
+height `H`, `guidance.py` emits normalized displacement:
 
 ```math
 e_x=\frac{u-W/2}{W/2}, \qquad e_y=\frac{v-H/2}{H/2}
 ```
 
 These errors lie in `[-1,1]`. Positive `e_x` means right of image centre;
-positive `e_y` means below it. Apparent marker radius is also reported.
+positive `e_y` means below it. Apparent marker radius is also reported. For
+example, at 640 x 240, a point 16 pixels right of centre has
+`e_x = 16 / 320 = 0.05`.
 
-These outputs are unitless, not metre offsets, and are intended for simulation
-or a future autonomy interface rather than direct flight commands.
+These outputs are unitless, not metre offsets. They express where the marker
+appears in the camera image and are valid only while the target is both stable
+and visible in the current frame. A target retained by the tracker after a
+missed frame is deliberately not emitted as guidance.
 
 ### Autonomy-facing perception message
 
@@ -351,7 +369,108 @@ the CV system never emits a held/lost track as if it were a live measurement.
 The adapter does not choose a network, serial, ROS, or MAVLink transport and
 does not issue any vehicle command.
 
-## Calibration and relative position
+### Live runtime workflow (`main.py`)
+
+The live program combines the pipeline with the current Pixhawk integration in
+the following order on every frame:
+
+1. Open the configured camera, request its width, height, FPS, and a short
+   capture buffer. The driver may choose a different mode, so the real mode
+   must match the assumptions below.
+2. Connect to `/dev/ttyAMA0` at 921600 baud and wait up to five seconds for a
+   MAVLink heartbeat. If no heartbeat arrives, the program releases the camera
+   and exits rather than running without its expected flight-controller link.
+3. Capture one frame and run `LandingMarkerPipeline.process(frame)`: grayscale,
+   blur, Canny edges, circle proposals, ROI/cross validation, tracking, and
+   image guidance.
+4. Build an `AutonomyTargetAdapter` message for logs or a future independent
+   autonomy transport. This message itself does not control a vehicle.
+5. Only when guidance is fresh (stable **and** visible) convert its
+   `target_point` to body-frame angular offsets and send `LANDING_TARGET`.
+6. If payload release has not already happened, count only consecutive fresh
+   frames whose horizontal and vertical image errors are both within the
+   configured alignment threshold. A missing, unstable, held, or off-centre
+   target resets that count immediately.
+7. Once the count reaches its threshold, issue one `MAV_CMD_DO_SET_SERVO`
+   command. `payload_dropped` latches true so this process cannot send a second
+   release command during the same program run.
+
+The normal loop ends when the camera returns no frame or the user presses `q`.
+It then releases the camera and closes OpenCV windows. Debug windows are only
+created when `DEBUG = True`.
+
+### Pixel-to-body angle conversion and MAVLink output
+
+`mav_adapter.py` currently assumes a 640 x 240 image, horizontal FOV of 67.5
+degrees, vertical FOV of 42.5 degrees, and an installation where the top of the
+camera image points toward the drone nose. Its image-centre constants are:
+
+```math
+C_x = 640/2, \qquad C_y = 240/2
+```
+
+For the target pixel, first form image offsets:
+
+```math
+\Delta x=u-C_x, \qquad \Delta y=v-C_y
+```
+
+The camera-to-body convention used by the code is then:
+
+```math
+p_{forward}=-\Delta y, \qquad p_{right}=\Delta x
+```
+
+Thus, a marker above the image centre becomes a positive forward direction;
+one to the right becomes a positive right direction. With horizontal and
+vertical fields of view `F_h` and `F_v`, the angular approximation is:
+
+```math
+\theta_{forward}=\arctan\left(\frac{p_{forward}}{C_y}
+                         \tan\frac{F_v}{2}\right)
+```
+
+```math
+\theta_{right}=\arctan\left(\frac{p_{right}}{C_x}
+                       \tan\frac{F_h}{2}\right)
+```
+
+The runtime sends these as `angle_x` and `angle_y` in a MAVLink
+`LANDING_TARGET` message using `MAV_FRAME_BODY_FRD`. It sends `distance = 0.0`;
+therefore this message does **not** provide a measured altitude or marker range.
+How a particular autopilot firmware and flight mode consume an angle-only
+message must be verified in a simulator and on the intended hardware.
+
+This conversion is a field-of-view model, not full camera calibration. Its
+quality depends on the actual FOV, the real capture resolution, negligible lens
+distortion, and correct camera mounting. The constants in `mav_adapter.py` are
+not automatically derived from `config.py`. Change and validate them together
+whenever the camera mode, lens, crop, or installation changes. If the camera is
+rotated, mirrored, or mounted differently, the forward/right signs can be
+wrong; validate directions without propellers before flight.
+
+### Current payload-alignment gate
+
+The present values are defined near the top of `main.py`:
+
+| Value | Current setting | Meaning |
+| --- | ---: | --- |
+| `ALIGNMENT_THRESHOLD` | `0.05` | Both normalized image errors must be smaller than 0.05 in magnitude. At 640 x 240, this is within roughly 16 pixels horizontally and 6 pixels vertically of the image centre. |
+| `STABLE_FRAMES_REQUIRED` | `10` | Number of consecutive fresh, in-tolerance frames required. At a true 15 FPS this is about 0.67 seconds, but the actual time depends on achieved frame rate. |
+| Servo channel | `9` | Channel supplied to `MAV_CMD_DO_SET_SERVO`. It must be the correctly configured, safe payload channel on the flight controller. |
+| Open PWM | `2000` | PWM value sent to that channel when the release condition is met. It must be verified against the physical mechanism. |
+
+This gate is strictly image alignment; it does not check flight mode, altitude,
+ground clearance, vehicle velocity, arming state, payload status, or whether a
+human has authorized release. It must be treated as a development integration
+until those independent safety interlocks exist and have been tested.
+
+## Optional calibration and relative position
+
+The deployed workflow can detect, centre, track, and transmit **angular**
+marker direction without a checkerboard calibration. That is the current mode:
+`POSE_ENABLED = False`, and no trusted metre altitude, range, or lateral metre
+offset is claimed by the vision pipeline.
 
 `calibrate_camera.py` estimates the deployment camera's intrinsic matrix and
 lens distortion from checkerboard photographs:
@@ -383,9 +502,30 @@ With trusted altitude `h`, a level-ground approximation is:
 
 Known physical marker diameter also enables a fronto-parallel range
 approximation. It is not a replacement for full pose estimation under tilt.
-Calibration remains disabled by default until real calibration data exists.
+Calibration remains optional and disabled by default. If reliable metre-scale
+position is needed later, use validated calibration with a known marker size,
+or combine camera bearings with a separate trusted altitude/range sensor. Do
+not present apparent pixel radius or the FOV-based MAVLink angle as a measured
+distance in metres.
 
 ## Debugging, testing, and performance
+
+For development, set `DEBUG = True` and present the marker at different sizes,
+rotations, lighting levels, and positions. The live overlays expose the
+evidence chain: candidate circle, circle density, contour edges, fitted-line
+directions, crossing point, final confidence, track state, and normalized
+image error. Set `DEBUG = False` for normal operation to avoid UI overhead.
+
+Before connecting a live payload, test the complete runtime in stages:
+
+1. Run the perception pipeline with recorded video and confirm a live marker
+   produces a stable track and errors with the expected sign.
+2. With motors disarmed and the payload disconnected, confirm that moving the
+   marker up/down/left/right yields the expected forward/right body angles.
+3. Confirm that a lost marker, an unstable marker, or a marker outside the
+   threshold resets the alignment count.
+4. Use a harmless test load or no load to validate the intended servo channel
+   and PWM. The current code can command the servo after its release gate.
 
 ## Configuration reference
 
@@ -417,7 +557,6 @@ means it matters only when the related feature is enabled.
 | `CANNY_LOW` | Active | Weak-edge threshold. Lower keeps faint edges and more noise; higher removes weak edges. |
 | `CANNY_HIGH` | Active | Strong-edge threshold. Higher requires clearer edges and reduces clutter; it must stay above `CANNY_LOW`. |
 | `HOUGH_DP` | Active | Circle-search resolution scale. Lower is more detailed/costly; higher is coarser/faster. |
-| `HOUGH_MIN_DIST` | Active | Minimum separation between circle centres. Higher removes nearby duplicates; lower allows more candidates. |
 | `HOUGH_PARAM2` | Active | Circle-vote strictness. Higher finds fewer/cleaner circles; lower finds more circles and more false positives. |
 | `MIN_RADIUS`, `MAX_RADIUS` | Active | Smallest/largest acceptable circle radius in pixels. Widening the range detects more sizes but increases work and false candidates. |
 | `MIN_EDGE_DENSITY` | Active | Required edge evidence around a circle. Higher rejects weak circles; lower accepts worn circles and more false ones. |
@@ -448,7 +587,21 @@ For recommended tuning order, current values, examples, and fuller
 explanations of each trade-off, use the linked configuration guide before
 changing a value.
 
-Run the live system:
+### Running and validating the system
+
+The runtime imports OpenCV (`cv2`), NumPy, and `pymavlink`. It also expects a
+working camera and, when `main.py` is used unchanged, a Pixhawk MAVLink link on
+`/dev/ttyAMA0` at 921600 baud. Confirm the virtual environment contains these
+packages before deployment.
+
+**Important:** `main.py` is not a vision-only preview in its current form. It
+waits for a Pixhawk heartbeat, sends `LANDING_TARGET` messages when a live
+target is available, and can send the configured servo command after ten
+aligned frames. For perception-only validation, use the automated tests or
+`evaluate_video.py` below rather than attaching an active payload.
+
+Run the integrated live system only after the connection, servo configuration,
+and safety conditions above have been checked:
 
 ```bash
 venv/bin/python main.py
@@ -494,14 +647,24 @@ the actual deployment camera because laptop performance is not representative.
 
 ## Safety boundary and remaining work
 
-DroneCV is not an autopilot. Any autonomy system consuming its output must
+DroneCV is not an autopilot. The vision code supplies marker evidence and the
+current integration sends target angles plus a single servo command; neither
+substitutes for a flight-safety system. Any vehicle using this repository must
 enforce manual override, explicit state transitions, velocity and altitude
-limits, target-loss handling, timeouts, and an abort path.
+limits, target-loss handling, timeouts, geofencing, a tested abort path, and
+payload-release authorization outside the image-only gate.
 
-Before real autonomous landing, complete:
+Before real autonomous operation, complete and document:
 
-1. USB-camera video validation and threshold tuning.
-2. Checkerboard camera calibration and physical marker measurement.
-3. Camera-to-drone-body mounting/extrinsic calibration.
-4. Autonomy simulation and constrained ground/tethered testing.
-5. Incremental flight testing under appropriate safety procedures.
+1. USB-camera video validation and threshold tuning in conditions that match
+   the flight environment.
+2. Verification that the camera's actual resolution, FOV, orientation, and
+   `mav_adapter.py` constants agree; validate the forward/right sign convention
+   with motors disarmed.
+3. Simulator, bench, and constrained ground/tethered tests of the specific
+   flight-controller handling of `LANDING_TARGET`.
+4. A separate release state machine with flight-mode, altitude, velocity,
+   operator-authorization, and mechanical payload interlocks.
+5. Camera-to-drone-body mounting validation; optional calibrated camera and
+   physical marker measurement only if metre-level estimates are required.
+6. Incremental flight testing under appropriate safety procedures.

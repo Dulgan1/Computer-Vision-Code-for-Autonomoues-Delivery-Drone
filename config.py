@@ -6,7 +6,7 @@ Raspberry Pi 3 Model A+ (512 MB RAM)
 
 # Mode
 
-DEBUG = True
+DEBUG = False
 # ===========================
 # CAMERA
 # ===========================
@@ -21,9 +21,9 @@ CAMERA_BUFFER_SIZE = 1
 
 # Print average detection-pipeline time every N frames when enabled. Drawing
 # and OpenCV window display are deliberately excluded from this measurement.
-PERFORMANCE_LOGGING = True
+PERFORMANCE_LOGGING = False
 PERFORMANCE_LOG_INTERVAL = 60
-VERBOSE_PIPELINE_LOGGING = True
+VERBOSE_PIPELINE_LOGGING = False
 
 
 # ===========================
@@ -85,7 +85,7 @@ FULL_SCAN_INTERVAL = 15
 
 TRACK_SMOOTHING_ALPHA = 0.35
 TRACK_ASSOCIATION_DISTANCE = 80
-TRACK_CONFIRMATION_FRAMES = 2
+TRACK_CONFIRMATION_FRAMES = 3
 TRACK_MAX_MISSED_FRAMES = 5
 
 # =========================

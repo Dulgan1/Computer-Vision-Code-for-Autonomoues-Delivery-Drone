@@ -2,9 +2,9 @@ import math
 import time
 from pymavlink import mavutil
 
-# --- 1080p CAMERA PARAMETERS ---
-IMG_WIDTH = 1920.0
-IMG_HEIGHT = 1080.0
+# --- 240p CAMERA PARAMETERS ---
+IMG_WIDTH = 640.0
+IMG_HEIGHT = 240.0
 
 # Replace with your specific wide-angle lens FOV specifications
 HFOV_DEG = 67.5 
