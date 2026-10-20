@@ -111,6 +111,8 @@ while True:
     # Debug drawing
     if config.DEBUG:
 
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
         debug_frame = frame.copy()
 
         for candidate in candidates:
@@ -290,7 +292,7 @@ while True:
                 (255, 255, 0),
                 2,
             )
-
+        cv2.VideoWriter('output.mp4', fourcc, 15, (640, 480))
         cv2.imshow(
             "Camera",
             debug_frame

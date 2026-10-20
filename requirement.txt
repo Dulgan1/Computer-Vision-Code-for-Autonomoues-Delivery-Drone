@@ -1,0 +1,13 @@
+# Runtime dependencies for DroneCV.
+# Install with: python -m pip install -r requirement.txt
+# Python standard-library modules (argparse, csv, json, math, pathlib, time,
+# unittest, etc.) are intentionally not listed.
+
+# OpenCV camera access and classical computer-vision operations.
+opencv-python>=4.8,<5
+
+# Image arrays and numerical geometry.
+numpy>=1.24,<3
+
+# MAVLink communication with the Pixhawk.
+pymavlink>=2.4.41
