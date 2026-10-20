@@ -6,7 +6,7 @@ Raspberry Pi 3 Model A+ (512 MB RAM)
 
 # Mode
 
-DEBUG = False
+DEBUG = True
 # ===========================
 # CAMERA
 # ===========================

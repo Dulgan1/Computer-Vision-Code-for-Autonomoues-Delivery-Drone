@@ -27,19 +27,20 @@ STABLE_FRAMES_REQUIRED = 10 # Consecutive frames required to confirm stable alig
 stable_alignment_count = 0
 payload_dropped = False
 
-print("Connecting to Pixhawk...")
-try:
-    pixhawk = mavutil.mavlink_connection('/dev/ttyAMA0', baud=921600)
-    heartbeat = pixhawk.wait_heartbeat(timeout=5)
-    if heartbeat is None:
-        raise TimeoutError("No Pixhawk heartbeat received within 5 seconds.")
+if config.DEBUG is False:
+    print("Connecting to Pixhawk...")
+    try:
+        pixhawk = mavutil.mavlink_connection('/dev/ttyAMA0', baud=921600)
+        heartbeat = pixhawk.wait_heartbeat(timeout=5)
+        if heartbeat is None:
+            raise TimeoutError("No Pixhawk heartbeat received within 5 seconds.")
 
-    print("MAVLink connection established.")
-except Exception as e:
-    camera.release()
-    cv2.destroyAllWindows()
-    raise SystemExit(f"Pixhawk connection failed: {e}")
-#print("Connection established!")
+        print("MAVLink connection established.")
+    except Exception as e:
+        camera.release()
+        cv2.destroyAllWindows()
+        raise SystemExit(f"Pixhawk connection failed: {e}")
+    #print("Connection established!")
 
 
 if config.POSE_ENABLED:
@@ -75,28 +76,29 @@ while True:
     if config.VERBOSE_PIPELINE_LOGGING:
         print(autonomy_message)
 
-    if guidance_estimate is None:
-        # A missing guidance message means the target is absent, unstable, or
-        # held after a missed frame. Alignment must be consecutive live frames.
-        stable_alignment_count = 0
-    else:
-        send_landing_target_pixels(pixhawk, guidance_estimate["target_point"])
-        print(f"Transmitting target data: {guidance_estimate['target_point']}")
+    if config.DEBUG is False:
+        if guidance_estimate is None:
+            # A missing guidance message means the target is absent, unstable, or
+            # held after a missed frame. Alignment must be consecutive live frames.
+            stable_alignment_count = 0
+        else:
+            send_landing_target_pixels(pixhawk, guidance_estimate["target_point"])
+            print(f"Transmitting target data: {guidance_estimate['target_point']}")
 
-        if not payload_dropped:
-            x_error = abs(guidance_estimate.get("horizontal_error"))
-            y_error = abs(guidance_estimate.get("vertical_error"))
+            if not payload_dropped:
+                x_error = abs(guidance_estimate.get("horizontal_error"))
+                y_error = abs(guidance_estimate.get("vertical_error"))
 
-            if x_error < ALIGNMENT_THRESHOLD and y_error < ALIGNMENT_THRESHOLD:
-                stable_alignment_count += 1
-                print(f"Stable alignment count: {stable_alignment_count}/{STABLE_FRAMES_REQUIRED}")
+                if x_error < ALIGNMENT_THRESHOLD and y_error < ALIGNMENT_THRESHOLD:
+                    stable_alignment_count += 1
+                    print(f"Stable alignment count: {stable_alignment_count}/{STABLE_FRAMES_REQUIRED}")
 
-                if stable_alignment_count >= STABLE_FRAMES_REQUIRED:
-                    drop_payload(pixhawk, servo_channel=9, servo_open_pwm=2000)
-                    payload_dropped = True
-            else:
-                # The marker is live but no longer sufficiently centred.
-                stable_alignment_count = 0
+                    if stable_alignment_count >= STABLE_FRAMES_REQUIRED:
+                        drop_payload(pixhawk, servo_channel=9, servo_open_pwm=2000)
+                        payload_dropped = True
+                else:
+                    # The marker is live but no longer sufficiently centred.
+                    stable_alignment_count = 0
 
     if config.PERFORMANCE_LOGGING:
         pipeline_times.append(time.perf_counter() - pipeline_start)
@@ -252,6 +254,7 @@ while True:
             track_state = "stable" if tracked_target["is_stable"] else "acquiring"
             visibility = "visible" if tracked_target["visible"] else "held"
             cv2.circle(debug_frame, (track_x, track_y), 6, track_color, -1)
+            print(tracked_target)
             cv2.putText(
                 debug_frame,
                 f"Track {tracked_target['track_id']}: {track_state}, {visibility}",
